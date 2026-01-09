@@ -1,46 +1,31 @@
 # Release Guide
 
-## Prereqs
+This repo releases via GitHub Actions (see `.github/workflows/release.yml` and `.github/workflows/publish.yml`).
 
 - Ensure CI is green on `main`.
 - Confirm `CARGO_REGISTRY_TOKEN` is set in GitHub repo secrets for crates.io publish.
-- Confirm the default repo in `install.sh` matches the GitHub repo name.
 
-## Version Bump
+1. Update the version in `ra/Cargo.toml`.
+2. Run local checks:
 
-1. Update version in `ra/Cargo.toml`.
-2. Run a quick build:
-   ```sh
-   cargo build --release --manifest-path ra/Cargo.toml
-   ```
-3. Commit the version bump.
+```sh
+./scripts/release_prep.sh
+```
 
-## Tag and Push
+3. Commit the version bump (and any resulting `Cargo.lock` change).
+4. Tag and push:
 
 ```sh
 git tag vX.Y.Z
-git push origin main --tags
+git push origin --tags
 ```
 
-## What Happens Next
+## Verify
 
-- `.github/workflows/release.yml` builds and uploads binaries for:
-  - `x86_64-unknown-linux-musl`
-  - `aarch64-unknown-linux-musl`
-  - `x86_64-apple-darwin`
-  - `aarch64-apple-darwin`
-- `.github/workflows/publish.yml` publishes to crates.io using `ra/Cargo.toml`.
+- Confirm the GitHub Release has `ra-<target>.tar.gz` assets.
+- Smoke test install:
 
-## Verify the Release
-
-- Check the GitHub Release assets include:
-  - `ra-<target>.tar.gz` for each target
-- Test install:
-  ```sh
-  curl -fsSL https://raw.githubusercontent.com/justinwangx/ra-cli/main/install.sh | sh
-  ra --help
-  ```
-
-## Hotfix Release
-
-- Repeat the version bump + tag steps with a new patch version.
+```sh
+curl -fsSL https://raw.githubusercontent.com/justinwangx/ra-cli/main/install.sh | sh
+ra --help
+```
