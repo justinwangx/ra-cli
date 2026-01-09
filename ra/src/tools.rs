@@ -71,11 +71,13 @@ pub(crate) fn build_tools(submit_enabled: bool) -> Vec<Value> {
                     "type": "object",
                     "properties": {
                         "command": { "type": "string", "description": "The shell command to execute." },
-                        "workdir": { "type": "string", "description": "Working directory for the command." },
-                        "timeout_ms": { "type": "number", "description": "Timeout in milliseconds." },
-                        "max_output_chars": { "type": "number", "description": "Maximum output characters to return." }
+                        "workdir": { "type": ["string", "null"], "description": "Working directory for the command." },
+                        "timeout_ms": { "type": ["number", "null"], "description": "Timeout in milliseconds." },
+                        "max_output_chars": { "type": ["number", "null"], "description": "Maximum output characters to return." }
                     },
-                    "required": ["command"],
+                    // Some providers enforce `required` includes all keys in `properties`.
+                    // We keep optional semantics by allowing `null` and handling null/missing in the tool.
+                    "required": ["command", "workdir", "timeout_ms", "max_output_chars"],
                     "additionalProperties": false
                 }
             }
@@ -89,10 +91,10 @@ pub(crate) fn build_tools(submit_enabled: bool) -> Vec<Value> {
                     "type": "object",
                     "properties": {
                         "file_path": { "type": "string", "description": "Path to the file to read." },
-                        "offset": { "type": "integer", "minimum": 1, "default": 1, "description": "1-indexed start line (>= 1)." },
-                        "limit": { "type": "integer", "minimum": 1, "default": 200, "description": "Maximum number of lines to return (>= 1)." }
+                        "offset": { "type": ["integer", "null"], "minimum": 1, "default": 1, "description": "1-indexed start line (>= 1)." },
+                        "limit": { "type": ["integer", "null"], "minimum": 1, "default": 200, "description": "Maximum number of lines to return (>= 1)." }
                     },
-                    "required": ["file_path"],
+                    "required": ["file_path", "offset", "limit"],
                     "additionalProperties": false
                 }
             }
@@ -106,11 +108,11 @@ pub(crate) fn build_tools(submit_enabled: bool) -> Vec<Value> {
                     "type": "object",
                     "properties": {
                         "dir_path": { "type": "string", "description": "Path to the directory to list." },
-                        "offset": { "type": "integer", "minimum": 1, "default": 1, "description": "1-indexed start entry (>= 1)." },
-                        "limit": { "type": "integer", "minimum": 1, "default": 200, "description": "Maximum number of entries to return (>= 1)." },
-                        "depth": { "type": "integer", "minimum": 1, "default": 1, "description": "Maximum directory depth to traverse (>= 1)." }
+                        "offset": { "type": ["integer", "null"], "minimum": 1, "default": 1, "description": "1-indexed start entry (>= 1)." },
+                        "limit": { "type": ["integer", "null"], "minimum": 1, "default": 200, "description": "Maximum number of entries to return (>= 1)." },
+                        "depth": { "type": ["integer", "null"], "minimum": 1, "default": 1, "description": "Maximum directory depth to traverse (>= 1)." }
                     },
-                    "required": ["dir_path"],
+                    "required": ["dir_path", "offset", "limit", "depth"],
                     "additionalProperties": false
                 }
             }
@@ -124,11 +126,11 @@ pub(crate) fn build_tools(submit_enabled: bool) -> Vec<Value> {
                     "type": "object",
                     "properties": {
                         "pattern": { "type": "string", "description": "Rust regex pattern to search for (escape metacharacters for literal matches)." },
-                        "path": { "type": "string", "description": "Root path to search." },
-                        "include": { "type": "string", "description": "Optional glob filter for files (matched against path relative to root)." },
-                        "limit": { "type": "integer", "minimum": 1, "default": 100, "description": "Maximum number of matches to return (>= 1)." }
+                        "path": { "type": ["string", "null"], "description": "Root path to search." },
+                        "include": { "type": ["string", "null"], "description": "Optional glob filter for files (matched against path relative to root)." },
+                        "limit": { "type": ["integer", "null"], "minimum": 1, "default": 100, "description": "Maximum number of matches to return (>= 1)." }
                     },
-                    "required": ["pattern"],
+                    "required": ["pattern", "path", "include", "limit"],
                     "additionalProperties": false
                 }
             }
