@@ -5,12 +5,14 @@ use regex::Regex;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::env;
 use std::fs::{self, File};
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -87,6 +89,20 @@ struct Args {
         help = "Path to write the JSONL log file (overrides --log-dir)."
     )]
     log_path: Option<PathBuf>,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Print the JSONL event stream to stdout after completion (suppresses plain final answer output)."
+    )]
+    json: bool,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Stream the JSONL event stream to stdout as events occur (suppresses plain final answer output)."
+    )]
+    stream_json: bool,
 
     #[arg(long, help = "Maximum tool output characters to retain.")]
     max_tool_output_chars: Option<usize>,
@@ -205,23 +221,57 @@ struct CompletionResult {
 
 type ToolLogging = (Option<(String, String)>, Vec<Value>);
 
+#[derive(Clone)]
 struct Logger {
-    writer: BufWriter<File>,
+    inner: Rc<RefCell<LoggerInner>>,
+}
+
+struct LoggerInner {
+    file_writer: Option<BufWriter<File>>,
+    stdout_writer: Option<BufWriter<std::io::Stdout>>,
+    buffer: Option<Vec<Value>>,
 }
 
 impl Logger {
-    fn new(log_path: PathBuf) -> Result<Self> {
-        if let Some(parent) = log_path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create log directory {}", parent.display()))?;
-        }
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&log_path)
-            .with_context(|| format!("failed to create log file {}", log_path.display()))?;
+    fn new(
+        log_path: Option<PathBuf>,
+        stream_to_stdout: bool,
+        buffer_for_stdout: bool,
+    ) -> Result<Self> {
+        let file_writer = if let Some(log_path) = log_path {
+            if let Some(parent) = log_path.parent() {
+                fs::create_dir_all(parent).with_context(|| {
+                    format!("failed to create log directory {}", parent.display())
+                })?;
+            }
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&log_path)
+                .with_context(|| format!("failed to create log file {}", log_path.display()))?;
+            Some(BufWriter::new(file))
+        } else {
+            None
+        };
+
+        let stdout_writer = if stream_to_stdout {
+            Some(BufWriter::new(std::io::stdout()))
+        } else {
+            None
+        };
+
+        let buffer = if buffer_for_stdout {
+            Some(Vec::new())
+        } else {
+            None
+        };
+
         Ok(Self {
-            writer: BufWriter::new(file),
+            inner: Rc::new(RefCell::new(LoggerInner {
+                file_writer,
+                stdout_writer,
+                buffer,
+            })),
         })
     }
 
@@ -237,9 +287,37 @@ impl Logger {
                 json!(now.format(&Rfc3339).unwrap_or_else(|_| ts_ms.to_string()))
             });
         }
-        serde_json::to_writer(&mut self.writer, &enriched)?;
-        self.writer.write_all(b"\n")?;
-        self.writer.flush()?;
+        let mut inner = self.inner.borrow_mut();
+
+        if let Some(buf) = inner.buffer.as_mut() {
+            buf.push(enriched.clone());
+        }
+
+        if let Some(w) = inner.file_writer.as_mut() {
+            serde_json::to_writer(&mut *w, &enriched)?;
+            w.write_all(b"\n")?;
+            w.flush()?;
+        }
+
+        if let Some(w) = inner.stdout_writer.as_mut() {
+            serde_json::to_writer(&mut *w, &enriched)?;
+            w.write_all(b"\n")?;
+            w.flush()?;
+        }
+        Ok(())
+    }
+
+    fn emit_buffer_to_stdout(&self) -> Result<()> {
+        let inner = self.inner.borrow();
+        let Some(buf) = inner.buffer.as_ref() else {
+            return Ok(());
+        };
+        let mut out = BufWriter::new(std::io::stdout());
+        for event in buf {
+            serde_json::to_writer(&mut out, event)?;
+            out.write_all(b"\n")?;
+        }
+        out.flush()?;
         Ok(())
     }
 }
@@ -1488,6 +1566,9 @@ fn main() -> Result<()> {
         return Ok(());
     }
     let args = Args::parse();
+    if args.json && args.stream_json {
+        bail!("--json and --stream-json cannot both be set");
+    }
     let cwd = fs::canonicalize(&args.cwd)
         .with_context(|| format!("failed to resolve cwd {}", args.cwd.display()))?;
     let api_key = args
@@ -1507,7 +1588,17 @@ fn main() -> Result<()> {
 
     let task = load_task(&args)?;
     let answer = run_prompt(&args, task, &cwd, &api_key)?;
-    println!("{}", answer);
+    if args.stream_json {
+        // In streaming JSON mode, stdout is reserved for JSONL events.
+        return Ok(());
+    }
+    if args.json {
+        // In buffered JSON mode, we print the JSONL stream at the end (and suppress plain output).
+        // The logger is already buffering and will flush to stdout on successful completion.
+        // Note: run_prompt writes events to the buffer; emitting happens there on success/failure.
+        return Ok(());
+    }
+    println!("{answer}");
     Ok(())
 }
 
@@ -1531,8 +1622,9 @@ fn run_prompt(args: &Args, prompt: String, cwd: &Path, api_key: &str) -> Result<
             let filename = format!("ra-{}-{}.jsonl", safe_ts, session_id);
             log_dir.join(filename)
         };
-        Logger::new(log_path)?
+        Logger::new(Some(log_path), args.stream_json, args.json)?
     };
+    let logger_for_output = logger.clone();
 
     // UX default:
     // - `ra "PROMPT"` behaves like a normal CLI by default (no submit; exit on first assistant reply).
@@ -1572,5 +1664,19 @@ fn run_prompt(args: &Args, prompt: String, cwd: &Path, api_key: &str) -> Result<
         next_item_id: 0,
     };
 
-    agent.run(prompt)
+    match agent.run(prompt) {
+        Ok(answer) => {
+            if args.json {
+                logger_for_output.emit_buffer_to_stdout()?;
+            }
+            Ok(answer)
+        }
+        Err(err) => {
+            if args.json {
+                // Best-effort: emit any buffered events even on error.
+                let _ = logger_for_output.emit_buffer_to_stdout();
+            }
+            Err(err)
+        }
+    }
 }

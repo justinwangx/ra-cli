@@ -48,6 +48,12 @@ ra --prompt-file /path/to/prompt.txt
 
 # Write logs somewhere specific
 ra --log-dir /tmp/ra-logs --exec "List files."
+
+# Emit JSONL log stream to stdout at the end
+ra --json --exec "List files."
+
+# Stream JSONL log events to stdout as they happen
+ra --stream-json --exec "List files."
 ```
 
 Logs are written to a unique `ra-<timestamp>-<session_id>.jsonl` file in `--log-dir` (default: `--cwd`), or to `--log-path` if set. Format is a Codex
