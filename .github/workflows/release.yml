@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build/release (e.g. v0.1.0). Required for manual runs."
+        required: true
+        type: string
 
 jobs:
   build:
@@ -23,6 +28,22 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # For manual runs, build the tagged revision so assets match the tag.
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+      - name: resolve tag context
+        id: tagctx
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "ref=refs/tags/${tag}" >> "${GITHUB_OUTPUT}"
+          echo "sha=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
       - uses: taiki-e/upload-rust-binary-action@v1
         with:
           bin: ra
@@ -30,4 +51,9 @@ jobs:
           manifest-path: ra/Cargo.toml
           archive: ra-${{ matrix.target }}
         env:
+          # upload-rust-binary-action (via create-gh-release-action) expects a tag/ref context.
+          # On workflow_dispatch, GitHub provides refs/heads/<branch>; override to the chosen tag.
+          GITHUB_REF: ${{ steps.tagctx.outputs.ref }}
+          GITHUB_REF_NAME: ${{ steps.tagctx.outputs.tag }}
+          GITHUB_SHA: ${{ steps.tagctx.outputs.sha }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
