@@ -1,0 +1,27 @@
+[package]
+name = "ra-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Baseline ReAct-style CLI agent for evaluation."
+license = "MIT"
+repository = "https://github.com/justinwangx/ra-cli"
+homepage = "https://github.com/justinwangx/ra-cli"
+readme = "../README.md"
+keywords = ["react", "agent", "cli", "openrouter"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "ra"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4.5.4", features = ["derive", "env"] }
+globset = "0.4"
+regex = "1"
+reqwest = { version = "0.12", features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+walkdir = "2"
+wait-timeout = "0.2"

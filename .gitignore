@@ -1,0 +1,8 @@
+/.DS_Store
+/.env
+/*.jsonl
+
+/ra/target/
+/ra/*.log
+
+SPEC.md
