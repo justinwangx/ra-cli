@@ -14,6 +14,7 @@ use std::path::PathBuf;
 ))]
 #[command(
     name = "ra",
+    version,
     about = "Ra is a baseline ReAct CLI agent for OpenRouter-compatible models.",
     long_about = "Ra is a baseline ReAct CLI agent for OpenRouter-compatible models."
 )]

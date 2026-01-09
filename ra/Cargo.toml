@@ -1,6 +1,6 @@
 [package]
 name = "ra-cli"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 description = "Baseline ReAct-style CLI agent for evaluation."
 license = "MIT"
