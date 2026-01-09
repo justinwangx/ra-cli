@@ -2,9 +2,9 @@
 
 Baseline ReAct CLI agent for OpenRouter-compatible models.
 
-## Install
+## Quick Start
 
-One-line installer:
+Install:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/justinwangx/ra-cli/main/install.sh | sh
@@ -12,8 +12,6 @@ curl -fsSL https://raw.githubusercontent.com/justinwangx/ra-cli/main/install.sh 
 
 The script installs `ra` into `/usr/local/bin` (if writable) or `~/.local/bin`.
 Set `RA_REPO` to override the GitHub repo, or `RA_VERSION` to pin a tag.
-
-## Quick Start
 
 Set your OpenRouter API key:
 
@@ -59,13 +57,21 @@ ra --stream-json --exec "List files."
 Logs are written to a unique `ra-<timestamp>-<session_id>.jsonl` file in `--log-dir` (default: `--cwd`), or to `--log-path` if set. Format is a Codex
 `exec --json`-style JSONL stream with `thread.started`, `turn.started`, `item.*`, and `turn.completed`.
 
-## Build
+## Install (Cargo)
 
-Install from source:
+From crates.io:
+
+```sh
+cargo install ra-cli
+```
+
+From source:
 
 ```sh
 cargo install --path ra
 ```
+
+## Build
 
 Install targets:
 
