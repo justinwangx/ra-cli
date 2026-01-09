@@ -2,7 +2,7 @@
 
 set -eu
 
-REPO="${RA_REPO:-justinwang/ra-cli}"
+REPO="${RA_REPO:-justinwangx/ra-cli}"
 VERSION="${RA_VERSION:-latest}"
 
 if ! command -v curl >/dev/null 2>&1; then
