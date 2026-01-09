@@ -12,6 +12,8 @@ use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 use uuid::Uuid;
 use wait_timeout::ChildExt;
 use walkdir::WalkDir;
@@ -78,6 +80,13 @@ struct Args {
 
     #[arg(long, help = "Directory to write the JSONL log file.")]
     log_dir: Option<PathBuf>,
+
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Path to write the JSONL log file (overrides --log-dir)."
+    )]
+    log_path: Option<PathBuf>,
 
     #[arg(long, help = "Maximum tool output characters to retain.")]
     max_tool_output_chars: Option<usize>,
@@ -206,7 +215,10 @@ impl Logger {
             fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create log directory {}", parent.display()))?;
         }
-        let file = File::create(&log_path)
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&log_path)
             .with_context(|| format!("failed to create log file {}", log_path.display()))?;
         Ok(Self {
             writer: BufWriter::new(file),
@@ -214,7 +226,18 @@ impl Logger {
     }
 
     fn log_event(&mut self, event: &Value) -> Result<()> {
-        serde_json::to_writer(&mut self.writer, event)?;
+        let mut enriched = event.clone();
+        if let Value::Object(obj) = &mut enriched {
+            // Codex-style logs include timestamps; we emit both a human-readable UTC timestamp
+            // and a stable numeric timestamp for sorting.
+            let now = OffsetDateTime::now_utc();
+            let ts_ms = now.unix_timestamp_nanos() / 1_000_000;
+            obj.entry("timestamp_ms").or_insert_with(|| json!(ts_ms));
+            obj.entry("timestamp").or_insert_with(|| {
+                json!(now.format(&Rfc3339).unwrap_or_else(|_| ts_ms.to_string()))
+            });
+        }
+        serde_json::to_writer(&mut self.writer, &enriched)?;
         self.writer.write_all(b"\n")?;
         self.writer.flush()?;
         Ok(())
@@ -1454,9 +1477,27 @@ fn main() -> Result<()> {
 }
 
 fn run_prompt(args: &Args, prompt: String, cwd: &Path, api_key: &str) -> Result<String> {
-    let log_dir = args.log_dir.clone().unwrap_or_else(|| cwd.to_path_buf());
-    let log_path = log_dir.join("ra.jsonl");
-    let logger = Logger::new(log_path)?;
+    let session_id = Uuid::new_v4().to_string();
+    let logger = {
+        let log_path = if let Some(path) = &args.log_path {
+            resolve_path(cwd, path)
+        } else {
+            let log_dir = args
+                .log_dir
+                .as_deref()
+                .map(|p| resolve_path(cwd, p))
+                .unwrap_or_else(|| cwd.to_path_buf());
+            // Avoid log overwrites by default by making the log filename unique per run.
+            let now = OffsetDateTime::now_utc();
+            let rfc3339 = now
+                .format(&Rfc3339)
+                .unwrap_or_else(|_| "unknown-time".to_string());
+            let safe_ts = rfc3339.replace(':', "-");
+            let filename = format!("ra-{}-{}.jsonl", safe_ts, session_id);
+            log_dir.join(filename)
+        };
+        Logger::new(log_path)?
+    };
 
     // UX default:
     // - `ra "PROMPT"` behaves like a normal CLI by default (no submit; exit on first assistant reply).
@@ -1480,7 +1521,7 @@ fn run_prompt(args: &Args, prompt: String, cwd: &Path, api_key: &str) -> Result<
         base_url: args.base_url.clone(),
         model: args.model.clone(),
         api_key: api_key.to_string(),
-        session_id: Uuid::new_v4().to_string(),
+        session_id,
         tools,
         messages: Vec::new(),
         temperature: args.temperature,
