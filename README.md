@@ -3,7 +3,8 @@
 Baseline ReAct CLI agent for OpenRouter-compatible models.
 
 ```
-> [!WARNING] > `ra` is designed for **agentic evaluations that run in sandboxed environments**, as a baseline against more advanced CLI agents like Codex, Claude Code, and Gemini CLI. It can execute arbitrary shell commands and read/write files via tool calls. If you run it on your machine outside a sandbox, do so **at your own risk** and only in a workspace you’re comfortable exposing to the model.
+> [!WARNING]
+> `ra` is designed for **agentic evaluations that run in sandboxed environments**, as a baseline against more advanced CLI agents like Codex, Claude Code, and Gemini CLI. It can execute arbitrary shell commands and read/write files via tool calls. If you run it on your machine outside a sandbox, do so **at your own risk** and only in a workspace you’re comfortable exposing to the model.
 ```
 
 ## Quick Start
