@@ -46,11 +46,11 @@ ra --exec "Summarize the repo layout and point out anything surprising."
 # Run a longer task from a file (defaults to exec/agent mode)
 ra --prompt-file /path/to/prompt.txt
 
-# Write logs somewhere specific (writes ra.jsonl)
+# Write logs somewhere specific
 ra --log-dir /tmp/ra-logs --exec "List files."
 ```
 
-Logs are written to `ra.jsonl` in `--log-dir` (default: `--cwd`). Format is a Codex
+Logs are written to a unique `ra-<timestamp>-<session_id>.jsonl` file in `--log-dir` (default: `--cwd`), or to `--log-path` if set. Format is a Codex
 `exec --json`-style JSONL stream with `thread.started`, `turn.started`, `item.*`, and `turn.completed`.
 
 ## Build
