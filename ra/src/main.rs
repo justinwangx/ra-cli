@@ -840,6 +840,25 @@ Rules:\n\
         time_limit_str,
     ));
 
+    prompt.push_str(
+        "\n\nTools:\n\
+- shell_command(command, workdir?, timeout_ms?, max_output_chars?)\n\
+- read_file(file_path, offset?, limit?)\n\
+- list_dir(dir_path, offset?, limit?, depth?)\n\
+- grep_files(pattern, path?, include?, limit?)\n\
+- apply_patch(patch)\n",
+    );
+    if submit_enabled {
+        prompt.push_str("- submit(answer)\n");
+    }
+
+    prompt.push_str(
+        "\nTool usage notes:\n\
+- Pagination is 1-indexed: read_file.offset and list_dir.offset start at 1 (not 0). limit/depth must be >= 1.\n\
+- grep_files.pattern is a Rust regex. Escape metacharacters if you want a literal match (e.g. use \"main\\(\" to search for \"main(\").\n\
+- If you need to edit files, prefer apply_patch.\n",
+    );
+
     let agents_text = load_agents_instructions(cwd)?;
     if let Some(agent_notes) = agents_text.as_ref() {
         prompt.push_str("\n\n");
@@ -1081,7 +1100,10 @@ fn read_file(args: &ReadFileArgs, cwd: &Path) -> Result<String> {
         .unwrap_or(DEFAULT_READ_LIMIT)
         .min(DEFAULT_READ_LIMIT);
     if offset < 1 || limit < 1 {
-        return Ok(tool_error("offset and limit must be >= 1".to_string()));
+        return Ok(tool_error(
+            "invalid pagination: read_file.offset and read_file.limit must be >= 1 (offset is 1-indexed)"
+                .to_string(),
+        ));
     }
 
     let path = resolve_path(cwd, Path::new(&args.file_path));
@@ -1127,7 +1149,8 @@ fn list_dir(args: &ListDirArgs, cwd: &Path) -> Result<String> {
     let depth = args.depth.unwrap_or(1);
     if offset < 1 || limit < 1 || depth < 1 {
         return Ok(tool_error(
-            "offset, limit, and depth must be >= 1".to_string(),
+            "invalid pagination: list_dir.offset, list_dir.limit, and list_dir.depth must be >= 1 (offset is 1-indexed)"
+                .to_string(),
         ));
     }
 
@@ -1192,11 +1215,20 @@ fn grep_files(args: &GrepFilesArgs, cwd: &Path) -> Result<String> {
         .unwrap_or(DEFAULT_GREP_LIMIT)
         .min(DEFAULT_GREP_LIMIT);
     if limit < 1 {
-        return Ok(tool_error("limit must be >= 1".to_string()));
+        return Ok(tool_error(
+            "invalid limit: grep_files.limit must be >= 1".to_string(),
+        ));
     }
 
-    let pattern = Regex::new(&args.pattern)
-        .with_context(|| format!("invalid regex pattern: {}", args.pattern))?;
+    let pattern = match Regex::new(&args.pattern) {
+        Ok(p) => p,
+        Err(err) => {
+            return Ok(tool_error(format!(
+                "invalid regex pattern: {}: {} (tip: escape metacharacters for literal matches, e.g. \"main\\\\(\" to match \"main(\")",
+                args.pattern, err
+            )));
+        }
+    };
 
     let globset = if let Some(include) = &args.include {
         let glob = Glob::new(include).context("invalid include glob")?;
@@ -1220,7 +1252,10 @@ fn grep_files(args: &GrepFilesArgs, cwd: &Path) -> Result<String> {
             continue;
         }
         if let Some(ref set) = globset {
-            if !set.is_match(entry.path()) {
+            // Match include globs against the path relative to the search root so callers can
+            // use patterns like "ra/src/main.rs" or "**/*.rs" without needing absolute paths.
+            let rel = entry.path().strip_prefix(&root).unwrap_or(entry.path());
+            if !set.is_match(rel) {
                 continue;
             }
         }
@@ -1362,8 +1397,8 @@ fn build_tools(submit_enabled: bool) -> Vec<Value> {
                     "type": "object",
                     "properties": {
                         "file_path": { "type": "string", "description": "Path to the file to read." },
-                        "offset": { "type": "number", "description": "1-indexed start line." },
-                        "limit": { "type": "number", "description": "Maximum number of lines to return." }
+                        "offset": { "type": "integer", "minimum": 1, "default": 1, "description": "1-indexed start line (>= 1)." },
+                        "limit": { "type": "integer", "minimum": 1, "default": 200, "description": "Maximum number of lines to return (>= 1)." }
                     },
                     "required": ["file_path"],
                     "additionalProperties": false
@@ -1379,9 +1414,9 @@ fn build_tools(submit_enabled: bool) -> Vec<Value> {
                     "type": "object",
                     "properties": {
                         "dir_path": { "type": "string", "description": "Path to the directory to list." },
-                        "offset": { "type": "number", "description": "1-indexed start entry." },
-                        "limit": { "type": "number", "description": "Maximum number of entries to return." },
-                        "depth": { "type": "number", "description": "Maximum directory depth to traverse." }
+                        "offset": { "type": "integer", "minimum": 1, "default": 1, "description": "1-indexed start entry (>= 1)." },
+                        "limit": { "type": "integer", "minimum": 1, "default": 200, "description": "Maximum number of entries to return (>= 1)." },
+                        "depth": { "type": "integer", "minimum": 1, "default": 1, "description": "Maximum directory depth to traverse (>= 1)." }
                     },
                     "required": ["dir_path"],
                     "additionalProperties": false
@@ -1396,10 +1431,10 @@ fn build_tools(submit_enabled: bool) -> Vec<Value> {
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "pattern": { "type": "string", "description": "Regex pattern to search for." },
+                        "pattern": { "type": "string", "description": "Rust regex pattern to search for (escape metacharacters for literal matches)." },
                         "path": { "type": "string", "description": "Root path to search." },
-                        "include": { "type": "string", "description": "Optional glob filter for files." },
-                        "limit": { "type": "number", "description": "Maximum number of matches to return." }
+                        "include": { "type": "string", "description": "Optional glob filter for files (matched against path relative to root)." },
+                        "limit": { "type": "integer", "minimum": 1, "default": 100, "description": "Maximum number of matches to return (>= 1)." }
                     },
                     "required": ["pattern"],
                     "additionalProperties": false
