@@ -2,9 +2,10 @@ use crate::constants::DEFAULT_CONTINUE_MESSAGE;
 use crate::logger::Logger;
 use crate::prompt::build_system_prompt;
 use crate::protocol::{ApiErrorResponse, CompletionResult, TokenUsage, Usage};
-use crate::tools::{execute_tool, parse_patch_changes, tool_error};
+use crate::tools::{execute_tool, parse_patch_changes, tool_error, truncate};
 use anyhow::{anyhow, Context, Result};
 use reqwest::blocking::Client;
+use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -264,21 +265,35 @@ impl Agent {
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         let response = self
             .client
-            .post(url)
+            .post(&url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .json(request)
             .send()
-            .context("request failed")?;
+            .with_context(|| format!("OpenRouter request failed: POST {}", url))?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let err: ApiErrorResponse = response.json().context("error response decode failed")?;
-            let message = format!("{} (HTTP {})", err.error.message, status);
-            return Err(anyhow!(message));
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = response.text().with_context(|| {
+            format!("failed to read OpenRouter response body (HTTP {})", status)
+        })?;
+
+        if !status.is_success() {
+            return Err(anyhow!(format_openrouter_http_error(
+                &url,
+                status.as_u16(),
+                &headers,
+                &body
+            )));
         }
 
-        let parsed: crate::protocol::ChatCompletionResponse =
-            response.json().context("response decode failed")?;
+        let parsed: crate::protocol::ChatCompletionResponse = serde_json::from_str(&body)
+            .with_context(|| {
+                let (snippet, _) = truncate(&body, 2000);
+                format!(
+                    "OpenRouter returned an unexpected response body (HTTP {}):\n{}",
+                    status, snippet
+                )
+            })?;
         let choice = parsed
             .choices
             .into_iter()
@@ -552,6 +567,58 @@ fn parse_submit_answer(arguments: &str) -> Result<String> {
 fn is_context_error(message: &str) -> bool {
     let msg = message.to_lowercase();
     msg.contains("context") && msg.contains("length")
+}
+
+fn format_openrouter_http_error(url: &str, status: u16, headers: &HeaderMap, body: &str) -> String {
+    let request_id = headers
+        .get("x-request-id")
+        .or_else(|| headers.get("x-openrouter-request-id"))
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let mut api_message: Option<String> = None;
+    if let Ok(err) = serde_json::from_str::<ApiErrorResponse>(body) {
+        api_message = Some(err.error.message);
+    } else if let Ok(v) = serde_json::from_str::<Value>(body) {
+        // Best-effort: handle other providers that return {"error":"..."} or similar.
+        if let Some(s) = v.get("error").and_then(|e| e.as_str()) {
+            api_message = Some(s.to_string());
+        }
+    }
+
+    let hint = match status {
+        401 | 403 => "Hint: check your API key (set `OPENROUTER_API_KEY` or use `--api-key`) and that it has access to the model.",
+        404 => "Hint: check `--base-url` and the model name (`--model`).",
+        408 | 504 => "Hint: the request timed out; try again or use a faster model.",
+        429 => "Hint: you may be rate limited; retry later or lower concurrency.",
+        500 | 502 | 503 => "Hint: upstream/server error; retry later.",
+        _ => "",
+    };
+
+    let (snippet, _) = truncate(body, 2000);
+    let mut msg = String::new();
+    msg.push_str(&format!(
+        "OpenRouter API error (HTTP {}) when calling {}",
+        status, url
+    ));
+    if !request_id.is_empty() {
+        msg.push_str(&format!(" (request_id: {})", request_id));
+    }
+    if let Some(m) = api_message {
+        if !m.trim().is_empty() {
+            msg.push_str(&format!("\nMessage: {}", m.trim()));
+        }
+    }
+    if !snippet.trim().is_empty() {
+        msg.push_str("\nBody:");
+        msg.push('\n');
+        msg.push_str(snippet.trim());
+    }
+    if !hint.is_empty() {
+        msg.push('\n');
+        msg.push_str(hint);
+    }
+    msg
 }
 
 fn prune_messages(messages: &[Value]) -> Vec<Value> {
