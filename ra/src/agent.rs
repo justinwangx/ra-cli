@@ -755,53 +755,6 @@ fn now_millis() -> u128 {
         .as_millis()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::error_chain_has_retryable_io_dyn;
-    use std::error::Error as StdError;
-    use std::fmt;
-
-    #[test]
-    fn treats_unexpected_eof_as_retryable() {
-        #[derive(Debug)]
-        struct Wrapper(std::io::Error);
-        impl fmt::Display for Wrapper {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "wrapper")
-            }
-        }
-        impl StdError for Wrapper {
-            fn source(&self) -> Option<&(dyn StdError + 'static)> {
-                Some(&self.0)
-            }
-        }
-
-        let io = std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "eof");
-        let w = Wrapper(io);
-        assert!(error_chain_has_retryable_io_dyn(&w));
-    }
-
-    #[test]
-    fn does_not_mark_other_io_as_retryable() {
-        #[derive(Debug)]
-        struct Wrapper(std::io::Error);
-        impl fmt::Display for Wrapper {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "wrapper")
-            }
-        }
-        impl StdError for Wrapper {
-            fn source(&self) -> Option<&(dyn StdError + 'static)> {
-                Some(&self.0)
-            }
-        }
-
-        let io = std::io::Error::new(std::io::ErrorKind::Other, "other");
-        let w = Wrapper(io);
-        assert!(!error_chain_has_retryable_io_dyn(&w));
-    }
-}
-
 fn prune_messages(messages: &[Value]) -> Vec<Value> {
     let mut system = Vec::new();
     let mut non_system = Vec::new();
@@ -895,4 +848,51 @@ fn extract_tool_call_ids(msg: &Value) -> HashSet<String> {
         }
     }
     ids
+}
+
+#[cfg(test)]
+mod tests {
+    use super::error_chain_has_retryable_io_dyn;
+    use std::error::Error as StdError;
+    use std::fmt;
+
+    #[test]
+    fn treats_unexpected_eof_as_retryable() {
+        #[derive(Debug)]
+        struct Wrapper(std::io::Error);
+        impl fmt::Display for Wrapper {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "wrapper")
+            }
+        }
+        impl StdError for Wrapper {
+            fn source(&self) -> Option<&(dyn StdError + 'static)> {
+                Some(&self.0)
+            }
+        }
+
+        let io = std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "eof");
+        let w = Wrapper(io);
+        assert!(error_chain_has_retryable_io_dyn(&w));
+    }
+
+    #[test]
+    fn does_not_mark_other_io_as_retryable() {
+        #[derive(Debug)]
+        struct Wrapper(std::io::Error);
+        impl fmt::Display for Wrapper {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "wrapper")
+            }
+        }
+        impl StdError for Wrapper {
+            fn source(&self) -> Option<&(dyn StdError + 'static)> {
+                Some(&self.0)
+            }
+        }
+
+        let io = std::io::Error::other("other");
+        let w = Wrapper(io);
+        assert!(!error_chain_has_retryable_io_dyn(&w));
+    }
 }
