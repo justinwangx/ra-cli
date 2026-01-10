@@ -53,7 +53,13 @@ pub(crate) fn run_prompt(args: &Args, cwd: &Path, api_key: &str) -> Result<Strin
     };
 
     let tools = build_tools(submit_enabled);
-    let client = Client::new();
+    // Sane defaults:
+    // - explicit connect timeout so we fail fast on network issues
+    // - generous overall request timeout so slow generations don't hang forever
+    let client = Client::builder()
+        .connect_timeout(Duration::from_secs(20))
+        .timeout(Duration::from_secs(10 * 60))
+        .build()?;
     let mut agent = Agent::new(
         client,
         args.base_url.clone(),
@@ -68,6 +74,7 @@ pub(crate) fn run_prompt(args: &Args, cwd: &Path, api_key: &str) -> Result<Strin
             .unwrap_or(DEFAULT_MAX_TOOL_OUTPUT_CHARS),
         cwd.to_path_buf(),
         submit_enabled,
+        args.retry_429,
         logger,
     );
 
@@ -180,6 +187,7 @@ mod tests {
             max_tool_output_chars: None,
             exec: false,
             no_submit: true,
+            retry_429: false,
             prompt: Some("hi".to_string()),
         };
 
@@ -245,5 +253,184 @@ mod tests {
         assert_obj_has(u, "output_tokens");
 
         let _ = fs::remove_file(&log_path);
+    }
+
+    #[test]
+    fn retries_on_transient_503() {
+        // Local stub server for /chat/completions that returns 503 once, then 200 OK.
+        let listener = match TcpListener::bind("127.0.0.1:0") {
+            Ok(l) => l,
+            Err(err) => {
+                eprintln!("skipping retries_on_transient_503: bind failed: {}", err);
+                return;
+            }
+        };
+        let addr = listener.local_addr().expect("local_addr");
+        let base_url = format!("http://{}", addr);
+
+        let server_thread = thread::spawn(move || {
+            for i in 0..2 {
+                let (mut stream, _) = listener.accept().expect("accept");
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 4096];
+                loop {
+                    match stream.read(&mut tmp) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            buf.extend_from_slice(&tmp[..n]);
+                            if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+
+                if i == 0 {
+                    let body = r#"{"error":{"message":"temporary upstream issue"}}"#;
+                    let response = format!(
+                        "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    stream.write_all(response.as_bytes()).expect("write 503");
+                    let _ = stream.flush();
+                } else {
+                    let body = r#"{"choices":[{"message":{"role":"assistant","content":"ok","tool_calls":null}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    stream.write_all(response.as_bytes()).expect("write 200");
+                    let _ = stream.flush();
+                }
+            }
+        });
+
+        let cwd = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        assert!(cwd.is_dir(), "CARGO_MANIFEST_DIR should exist");
+
+        let log_path = cwd
+            .join("target")
+            .join(format!("retry-test-{}.jsonl", Uuid::new_v4()));
+        let _ = fs::remove_file(&log_path);
+        fs::create_dir_all(log_path.parent().unwrap()).expect("create log dir");
+
+        let args = Args {
+            model: "openai/gpt-4.1-mini".to_string(),
+            prompt_file: None,
+            cwd: cwd.clone(),
+            api_key: Some("test-key".to_string()),
+            base_url,
+            temperature: None,
+            max_steps: Some(1),
+            time_limit_sec: None,
+            log_dir: None,
+            log_path: Some(log_path.clone()),
+            json: false,
+            stream_json: false,
+            max_tool_output_chars: None,
+            exec: false,
+            no_submit: true,
+            retry_429: false,
+            prompt: Some("hi".to_string()),
+        };
+
+        let answer = run_prompt(&args, &cwd, "test-key").expect("run_prompt");
+        assert_eq!(answer, "ok");
+
+        server_thread.join().expect("server join");
+    }
+
+    #[test]
+    fn retries_on_429_when_enabled() {
+        // Local stub server for /chat/completions that returns 429 once (without Retry-After),
+        // then 200 OK. We only retry the 429 when args.retry_429 is set.
+        let listener = match TcpListener::bind("127.0.0.1:0") {
+            Ok(l) => l,
+            Err(err) => {
+                eprintln!("skipping retries_on_429_when_enabled: bind failed: {}", err);
+                return;
+            }
+        };
+        let addr = listener.local_addr().expect("local_addr");
+        let base_url = format!("http://{}", addr);
+
+        let server_thread = thread::spawn(move || {
+            for i in 0..2 {
+                let (mut stream, _) = listener.accept().expect("accept");
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 4096];
+                loop {
+                    match stream.read(&mut tmp) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            buf.extend_from_slice(&tmp[..n]);
+                            if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+
+                if i == 0 {
+                    let body = r#"{"error":{"message":"rate limited"}}"#;
+                    let response = format!(
+                        "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    stream.write_all(response.as_bytes()).expect("write 429");
+                    let _ = stream.flush();
+                } else {
+                    let body = r#"{"choices":[{"message":{"role":"assistant","content":"ok","tool_calls":null}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    stream.write_all(response.as_bytes()).expect("write 200");
+                    let _ = stream.flush();
+                }
+            }
+        });
+
+        let cwd = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        assert!(cwd.is_dir(), "CARGO_MANIFEST_DIR should exist");
+
+        let log_path = cwd
+            .join("target")
+            .join(format!("retry-429-test-{}.jsonl", Uuid::new_v4()));
+        let _ = fs::remove_file(&log_path);
+        fs::create_dir_all(log_path.parent().unwrap()).expect("create log dir");
+
+        let args = Args {
+            model: "openai/gpt-4.1-mini".to_string(),
+            prompt_file: None,
+            cwd: cwd.clone(),
+            api_key: Some("test-key".to_string()),
+            base_url,
+            temperature: None,
+            max_steps: Some(1),
+            time_limit_sec: None,
+            log_dir: None,
+            log_path: Some(log_path.clone()),
+            json: false,
+            stream_json: false,
+            max_tool_output_chars: None,
+            exec: false,
+            no_submit: true,
+            retry_429: true,
+            prompt: Some("hi".to_string()),
+        };
+
+        let answer = run_prompt(&args, &cwd, "test-key").expect("run_prompt");
+        assert_eq!(answer, "ok");
+
+        server_thread.join().expect("server join");
     }
 }

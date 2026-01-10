@@ -6,11 +6,14 @@ use crate::tools::{execute_tool, parse_patch_changes, tool_error, truncate};
 use anyhow::{anyhow, Context, Result};
 use reqwest::blocking::Client;
 use reqwest::header::HeaderMap;
+use reqwest::header::RETRY_AFTER;
+use reqwest::StatusCode;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 type ToolLogging = (Option<(String, String)>, Vec<Value>);
 
@@ -28,6 +31,7 @@ pub(crate) struct Agent {
     max_tool_output_chars: usize,
     cwd: PathBuf,
     submit_enabled: bool,
+    retry_429: bool,
     logger: Logger,
     token_usage_total: TokenUsage,
     next_item_id: u64,
@@ -48,6 +52,7 @@ impl Agent {
         max_tool_output_chars: usize,
         cwd: PathBuf,
         submit_enabled: bool,
+        retry_429: bool,
         logger: Logger,
     ) -> Self {
         Self {
@@ -64,6 +69,7 @@ impl Agent {
             max_tool_output_chars,
             cwd,
             submit_enabled,
+            retry_429,
             logger,
             token_usage_total: TokenUsage::default(),
             next_item_id: 0,
@@ -263,46 +269,110 @@ impl Agent {
 
     fn send_request(&self, request: &Value) -> Result<CompletionResult> {
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        let response = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(request)
-            .send()
-            .with_context(|| format!("OpenRouter request failed: POST {}", url))?;
+        // Completions are safe to retry. Small bounded retries make us resilient against transient
+        // stalls/timeouts while reading the response body.
+        const MAX_RETRIES: usize = 2;
+        let mut last_http_err: Option<anyhow::Error> = None;
 
-        let status = response.status();
-        let headers = response.headers().clone();
-        let body = response.text().with_context(|| {
-            format!("failed to read OpenRouter response body (HTTP {})", status)
-        })?;
+        for attempt in 0..=MAX_RETRIES {
+            let response = match self
+                .client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .json(request)
+                .send()
+            {
+                Ok(r) => r,
+                Err(err) => {
+                    if attempt < MAX_RETRIES && should_retry_reqwest_error(&err) {
+                        sleep_backoff(attempt, None);
+                        continue;
+                    }
+                    return Err(anyhow!(err)).with_context(|| {
+                        format!(
+                            "OpenRouter request failed: POST {} (attempt {}/{})",
+                            url,
+                            attempt + 1,
+                            MAX_RETRIES + 1
+                        )
+                    });
+                }
+            };
 
-        if !status.is_success() {
-            return Err(anyhow!(format_openrouter_http_error(
-                &url,
-                status.as_u16(),
-                &headers,
-                &body
-            )));
+            let status = response.status();
+            let headers = response.headers().clone();
+
+            // Read bytes first so we can retry on body-read timeouts, and decode lossily for
+            // error messages (JSON should be UTF-8, but we don't want to fail formatting).
+            let body_bytes = match response.bytes() {
+                Ok(b) => b,
+                Err(err) => {
+                    if attempt < MAX_RETRIES && should_retry_reqwest_error(&err) {
+                        sleep_backoff(attempt, None);
+                        continue;
+                    }
+                    return Err(anyhow!(err)).with_context(|| {
+                        format!(
+                            "failed to read OpenRouter response body (HTTP {}) (attempt {}/{})",
+                            status,
+                            attempt + 1,
+                            MAX_RETRIES + 1
+                        )
+                    });
+                }
+            };
+            let body = String::from_utf8_lossy(&body_bytes).to_string();
+
+            if !status.is_success() {
+                // Align with Codex defaults: do not blindly retry 429s unless the server
+                // provides an explicit Retry-After. This avoids retry-storming under hard limits.
+                let retry_after = headers.get(RETRY_AFTER).and_then(parse_retry_after_secs);
+                let retry_allowed = if status.as_u16() == 429 {
+                    self.retry_429 || retry_after.is_some()
+                } else {
+                    true
+                };
+
+                if attempt < MAX_RETRIES && retry_allowed && should_retry_status(status) {
+                    sleep_backoff(attempt, retry_after);
+                    last_http_err = Some(anyhow!(format_openrouter_http_error(
+                        &url,
+                        status.as_u16(),
+                        &headers,
+                        &body
+                    )));
+                    continue;
+                }
+                return Err(anyhow!(format_openrouter_http_error(
+                    &url,
+                    status.as_u16(),
+                    &headers,
+                    &body
+                )));
+            }
+
+            let parsed: crate::protocol::ChatCompletionResponse = serde_json::from_str(&body)
+                .with_context(|| {
+                    let (snippet, _) = truncate(&body, 2000);
+                    format!(
+                        "OpenRouter returned an unexpected response body (HTTP {}):\n{}",
+                        status, snippet
+                    )
+                })?;
+            let choice = parsed
+                .choices
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow!("no choices in response"))?;
+            return Ok(CompletionResult {
+                message: choice.message,
+                usage: parsed.usage,
+            });
         }
 
-        let parsed: crate::protocol::ChatCompletionResponse = serde_json::from_str(&body)
-            .with_context(|| {
-                let (snippet, _) = truncate(&body, 2000);
-                format!(
-                    "OpenRouter returned an unexpected response body (HTTP {}):\n{}",
-                    status, snippet
-                )
-            })?;
-        let choice = parsed
-            .choices
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow!("no choices in response"))?;
-        Ok(CompletionResult {
-            message: choice.message,
-            usage: parsed.usage,
-        })
+        // Defensive: we should have returned above. If we didn't, return the most recent HTTP
+        // error (e.g. repeated 503/429), or a generic error otherwise.
+        Err(last_http_err.unwrap_or_else(|| anyhow!("OpenRouter request failed after retries")))
     }
 
     fn log_thread_started(&mut self) -> Result<()> {
@@ -619,6 +689,40 @@ fn format_openrouter_http_error(url: &str, status: u16, headers: &HeaderMap, bod
         msg.push_str(hint);
     }
     msg
+}
+
+fn should_retry_status(status: StatusCode) -> bool {
+    matches!(status.as_u16(), 429 | 500 | 502 | 503 | 504)
+}
+
+fn should_retry_reqwest_error(err: &reqwest::Error) -> bool {
+    err.is_timeout() || err.is_connect() || err.is_body()
+}
+
+fn parse_retry_after_secs(v: &reqwest::header::HeaderValue) -> Option<u64> {
+    // Retry-After can be delta-seconds or an HTTP-date; we only parse delta-seconds.
+    let s = v.to_str().ok()?.trim();
+    s.parse::<u64>().ok()
+}
+
+fn sleep_backoff(attempt: usize, retry_after_secs: Option<u64>) {
+    // Exponential backoff with small jitter, capped.
+    // attempt=0 -> ~250ms, attempt=1 -> ~500ms, attempt=2 -> ~1000ms
+    let base_ms = 250u64.saturating_mul(1u64 << attempt.min(10));
+    let capped_ms = base_ms.min(3_000);
+    let jitter_ms = (now_millis() % 50) as u64; // 0..49ms
+    let delay_ms = retry_after_secs
+        .map(|s| s.saturating_mul(1000))
+        .unwrap_or(capped_ms)
+        .saturating_add(jitter_ms);
+    thread::sleep(Duration::from_millis(delay_ms));
+}
+
+fn now_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_else(|_| Duration::from_millis(0))
+        .as_millis()
 }
 
 fn prune_messages(messages: &[Value]) -> Vec<Value> {
