@@ -11,6 +11,7 @@ use reqwest::StatusCode;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashSet;
+use std::error::Error as StdError;
 use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -696,7 +697,36 @@ fn should_retry_status(status: StatusCode) -> bool {
 }
 
 fn should_retry_reqwest_error(err: &reqwest::Error) -> bool {
-    err.is_timeout() || err.is_connect() || err.is_body()
+    // reqwest classifies some truncated/chunked-body failures as decode errors (e.g. gzip, chunked
+    // framing), not as body errors. Those are safe to retry for our POST /chat/completions calls.
+    err.is_timeout()
+        || err.is_connect()
+        || err.is_body()
+        || err.is_decode()
+        || error_chain_has_retryable_io_dyn(err)
+}
+
+fn error_chain_has_retryable_io_dyn(err: &(dyn StdError + 'static)) -> bool {
+    // Treat common transport truncation as transient:
+    // - unexpected EOF during chunked framing ("unexpected EOF during chunk size line")
+    // - broken pipe / connection reset while reading
+    let mut cur: Option<&(dyn StdError + 'static)> = Some(err);
+    while let Some(e) = cur {
+        if let Some(io) = e.downcast_ref::<std::io::Error>() {
+            use std::io::ErrorKind;
+            if matches!(
+                io.kind(),
+                ErrorKind::UnexpectedEof
+                    | ErrorKind::ConnectionReset
+                    | ErrorKind::ConnectionAborted
+                    | ErrorKind::BrokenPipe
+            ) {
+                return true;
+            }
+        }
+        cur = e.source();
+    }
+    false
 }
 
 fn parse_retry_after_secs(v: &reqwest::header::HeaderValue) -> Option<u64> {
@@ -723,6 +753,53 @@ fn now_millis() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_else(|_| Duration::from_millis(0))
         .as_millis()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::error_chain_has_retryable_io_dyn;
+    use std::error::Error as StdError;
+    use std::fmt;
+
+    #[test]
+    fn treats_unexpected_eof_as_retryable() {
+        #[derive(Debug)]
+        struct Wrapper(std::io::Error);
+        impl fmt::Display for Wrapper {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "wrapper")
+            }
+        }
+        impl StdError for Wrapper {
+            fn source(&self) -> Option<&(dyn StdError + 'static)> {
+                Some(&self.0)
+            }
+        }
+
+        let io = std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "eof");
+        let w = Wrapper(io);
+        assert!(error_chain_has_retryable_io_dyn(&w));
+    }
+
+    #[test]
+    fn does_not_mark_other_io_as_retryable() {
+        #[derive(Debug)]
+        struct Wrapper(std::io::Error);
+        impl fmt::Display for Wrapper {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "wrapper")
+            }
+        }
+        impl StdError for Wrapper {
+            fn source(&self) -> Option<&(dyn StdError + 'static)> {
+                Some(&self.0)
+            }
+        }
+
+        let io = std::io::Error::new(std::io::ErrorKind::Other, "other");
+        let w = Wrapper(io);
+        assert!(!error_chain_has_retryable_io_dyn(&w));
+    }
 }
 
 fn prune_messages(messages: &[Value]) -> Vec<Value> {
