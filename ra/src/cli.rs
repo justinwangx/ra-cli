@@ -98,6 +98,14 @@ pub(crate) struct Args {
     )]
     pub(crate) no_submit: bool,
 
+    #[arg(
+        long,
+        env = "RA_RETRY_429",
+        default_value_t = false,
+        help = "Retry HTTP 429 responses (rate limited). By default, 429s are only retried when Retry-After is present."
+    )]
+    pub(crate) retry_429: bool,
+
     #[arg(value_name = "PROMPT", help = "Prompt text (quote for spaces).")]
     pub(crate) prompt: Option<String>,
 }
