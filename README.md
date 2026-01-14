@@ -11,7 +11,7 @@ Baseline ReAct agent CLI for OpenRouter-compatible models. View the [specificati
 Install:
 
 ```sh
-# Run one of the below commands:
+# Run one of the following commands:
 npm i -g react-agent-cli
 cargo install ra-cli
 curl -fsSL https://raw.githubusercontent.com/justinwangx/ra-cli/main/install.sh | sh
@@ -38,8 +38,7 @@ ra "Summarize the repo layout."
   - **Single-shot (default)**: `ra "PROMPT"` exits after the first assistant response
   - **Exec/agent**: `ra --exec ...` (or `ra --prompt-file FILE`) continues until the model calls `submit`
 
-> [!WARNING]
-> `ra` is designed for **agentic evaluations that run in sandboxed environments**, as a baseline against more advanced CLI agents like Codex, Claude Code, and Gemini CLI. It can execute arbitrary shell commands and read/write files via tool calls. If you run it on your machine outside a sandbox, do so **at your own risk** and only in a workspace you’re comfortable exposing to the model.
+> [!WARNING] > `ra` is designed for **agentic evaluations that run in sandboxed environments**, as a baseline against more advanced CLI agents like Codex, Claude Code, and Gemini CLI. It can execute arbitrary shell commands and read/write files via tool calls. If you run it on your machine outside a sandbox, do so **at your own risk** and only in a workspace you’re comfortable exposing to the model.
 
 ### Examples
 
