@@ -2,7 +2,7 @@ use crate::constants::DEFAULT_CONTINUE_MESSAGE;
 use crate::logger::Logger;
 use crate::prompt::build_system_prompt;
 use crate::protocol::{ApiErrorResponse, CompletionResult, TokenUsage, Usage};
-use crate::tools::{execute_tool, parse_patch_changes, tool_error, truncate};
+use crate::tools::{execute_tool, parse_patch_changes, tool_error, truncate, ToolExecContext};
 use anyhow::{anyhow, Context, Result};
 use reqwest::blocking::Client;
 use reqwest::header::HeaderMap;
@@ -32,6 +32,7 @@ pub(crate) struct Agent {
     max_tool_output_chars: usize,
     cwd: PathBuf,
     submit_enabled: bool,
+    web_search_enabled: bool,
     retry_429: bool,
     logger: Logger,
     token_usage_total: TokenUsage,
@@ -53,6 +54,7 @@ impl Agent {
         max_tool_output_chars: usize,
         cwd: PathBuf,
         submit_enabled: bool,
+        web_search_enabled: bool,
         retry_429: bool,
         logger: Logger,
     ) -> Self {
@@ -70,6 +72,7 @@ impl Agent {
             max_tool_output_chars,
             cwd,
             submit_enabled,
+            web_search_enabled,
             retry_429,
             logger,
             token_usage_total: TokenUsage::default(),
@@ -86,6 +89,7 @@ impl Agent {
             self.max_steps,
             self.time_limit,
             self.submit_enabled,
+            self.web_search_enabled,
         )?;
         self.log_thread_started()?;
         self.log_turn_started(&task, &system_prompt, agents_text.as_deref())?;
@@ -205,8 +209,11 @@ impl Agent {
                             self.log_command_execution_started(item_id, command)?;
                         }
 
-                        let result =
-                            execute_tool(&tool_call, &self.cwd, self.max_tool_output_chars);
+                        let ctx = ToolExecContext {
+                            cwd: &self.cwd,
+                            max_output_chars: self.max_tool_output_chars,
+                        };
+                        let result = execute_tool(&tool_call, &ctx);
                         let success = result.is_ok();
                         let content = match result {
                             Ok(value) => value,
