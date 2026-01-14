@@ -1,6 +1,10 @@
 # Ra
 
-Baseline ReAct agent CLI for OpenRouter-compatible models.
+Baseline ReAct agent CLI for OpenRouter-compatible models. View the [specification](SPEC.md).
+
+> ReAct is the most common architecture used in agent frameworks and is the baseline against which you should measure more complex agents (it can be surprisingly difficult to hand-tune agents that perform better than a ReAct agent against a diverse set of tasks!).
+>
+> &mdash; [UK AISI](https://github.com/UKGovernmentBEIS/inspect_ai/blob/649dbfe0a8bb670c7ef88a52839b184cca823822/docs/react-agent.qmd#L7)
 
 ## Quick Start
 
@@ -11,7 +15,7 @@ curl -fsSL https://raw.githubusercontent.com/justinwangx/ra-cli/main/install.sh 
 ```
 
 The script installs `ra` into `/usr/local/bin` (if writable) or `~/.local/bin`.
-Set `RA_REPO` to override the GitHub repo, or `RA_VERSION` to pin a tag.
+Set `RA_VERSION` to pin a tag.
 
 Set your OpenRouter API key:
 
@@ -31,8 +35,7 @@ ra "Summarize the repo layout."
   - **Single-shot (default)**: `ra "PROMPT"` exits after the first assistant response
   - **Exec/agent**: `ra --exec ...` (or `ra --prompt-file FILE`) continues until the model calls `submit`
 
-> [!WARNING]
-> `ra` is designed for **agentic evaluations that run in sandboxed environments**, as a baseline against more advanced CLI agents like Codex, Claude Code, and Gemini CLI. It can execute arbitrary shell commands and read/write files via tool calls. If you run it on your machine outside a sandbox, do so **at your own risk** and only in a workspace you’re comfortable exposing to the model.
+> [!WARNING] > `ra` is designed for **agentic evaluations that run in sandboxed environments**, as a baseline against more advanced CLI agents like Codex, Claude Code, and Gemini CLI. It can execute arbitrary shell commands and read/write files via tool calls. If you run it on your machine outside a sandbox, do so **at your own risk** and only in a workspace you’re comfortable exposing to the model.
 
 ### Examples
 
