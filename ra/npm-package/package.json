@@ -1,6 +1,6 @@
 {
   "name": "react-agent-cli",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "description": "Baseline ReAct agent CLI (prebuilt binary installer).",
   "license": "MIT",
   "repository": {
