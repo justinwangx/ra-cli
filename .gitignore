@@ -5,4 +5,7 @@
 /ra/target/
 /ra/*.log
 
+# Local packaging artifacts (e.g. `npm pack`)
+*.tgz
+
 PRIVATE_SPEC.md
