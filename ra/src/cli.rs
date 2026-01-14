@@ -106,6 +106,15 @@ pub(crate) struct Args {
     )]
     pub(crate) retry_429: bool,
 
+    #[arg(
+        long = "enable-search",
+        alias = "search",
+        env = "RA_WEB_SEARCH",
+        default_value_t = false,
+        help = "Enable web tools (off by default): web_search (Tavily), web_open, web_find."
+    )]
+    pub(crate) web_search: bool,
+
     #[arg(value_name = "PROMPT", help = "Prompt text (quote for spaces).")]
     pub(crate) prompt: Option<String>,
 }

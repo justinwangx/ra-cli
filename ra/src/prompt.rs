@@ -25,6 +25,7 @@ pub(crate) fn build_system_prompt(
     max_steps: Option<usize>,
     time_limit: Option<Duration>,
     submit_enabled: bool,
+    web_search_enabled: bool,
 ) -> Result<(String, Option<String>)> {
     let mut prompt = String::from(
         "You are a CLI agent. Use tools to inspect and modify the workspace to complete the task.\n\
@@ -60,6 +61,11 @@ Rules:\n\
 - grep_files(pattern, path?, include?, limit?)\n\
 - apply_patch(patch)\n",
     );
+    if web_search_enabled {
+        prompt.push_str("- web_search(query, max_results?)\n");
+        prompt.push_str("- web_open(url, offset?, limit?)\n");
+        prompt.push_str("- web_find(url, pattern, max_results?, context_lines?)\n");
+    }
     if submit_enabled {
         prompt.push_str("- submit(answer)\n");
     }
@@ -70,6 +76,16 @@ Rules:\n\
 - grep_files.pattern is a Rust regex. Escape metacharacters if you want a literal match (e.g. use \"main\\(\" to search for \"main(\").\n\
 - If you need to edit files, prefer apply_patch.\n",
     );
+    if web_search_enabled {
+        prompt.push_str(
+            "- web_search requires RA_TAVILY_API_KEY (or TAVILY_API_KEY).\n\
+- web_open/web_find fetch live URLs and return extracted text with line numbers for citations.\n",
+        );
+        prompt.push_str(
+            "- Tip: Prefer web_find(url, pattern, ...) over repeatedly calling web_open with different offsets.\n\
+- Tip: Prefer official sources when available (e.g. blog.rust-lang.org for Rust release posts).\n",
+        );
+    }
 
     let agents_text = load_agents_instructions(cwd)?;
     if let Some(agent_notes) = agents_text.as_ref() {
