@@ -9,7 +9,7 @@ function main() {
   if (!fs.existsSync(binPath)) {
     console.error(
       "ra binary is not installed yet.\n" +
-        "Try reinstalling: npm i -g ra-cli\n" +
+        "Try reinstalling: npm i -g react-agent-cli\n" +
         "If this is a CI environment, ensure postinstall scripts are enabled."
     );
     process.exit(1);

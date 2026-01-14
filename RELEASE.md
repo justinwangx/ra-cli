@@ -42,7 +42,7 @@ gh workflow run release --ref refs/tags/vX.Y.Z
 
 - Confirm the GitHub Release has `ra-<target>.tar.gz` assets.
 - Confirm crates.io publish succeeded (`ra-cli`).
-- Confirm npm publish succeeded (`ra-cli`).
+- Confirm npm publish succeeded (`react-agent-cli`).
 - Smoke test installs:
 
 ```sh
@@ -53,6 +53,6 @@ ra --help
 
 ```sh
 # npm (installs ra by downloading a matching GitHub Release binary)
-npm i -g ra-cli
+npm i -g react-agent-cli
 ra --help
 ```
