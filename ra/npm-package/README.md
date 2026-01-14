@@ -1,11 +1,11 @@
-# ra-cli (npm)
+# react-agent-cli (npm)
 
 This npm package installs the `ra` CLI by downloading a matching prebuilt binary from the GitHub Releases for this repository.
 
 ## Install
 
 ```sh
-npm i -g ra-cli
+npm i -g react-agent-cli
 ```
 
 ## Notes

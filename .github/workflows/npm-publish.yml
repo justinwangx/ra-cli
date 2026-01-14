@@ -111,4 +111,9 @@ jobs:
             tag_args+=(--tag "${NPM_TAG}")
           fi
 
-          npm publish dist/npm/*.tgz "${tag_args[@]}"
+          pkg_name="$(node -e 'const p=require("./ra/npm-package/package.json"); process.stdout.write(p.name)')"
+          access_args=()
+          if [[ "${pkg_name}" == @*/* ]]; then
+            access_args+=(--access public)
+          fi
+          npm publish dist/npm/*.tgz "${access_args[@]}" "${tag_args[@]}"
