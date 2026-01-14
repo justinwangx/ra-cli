@@ -1,32 +1,15 @@
-# Specification
+# Ra Specification
 
 This document specifies the behavior of `ra`.
-
-## Scope
-
-The spec covers:
-
-- Agent control flow (request/response loop)
-- Tool surface (names, parameters, key semantics)
-- Termination behavior
-- Context overflow behavior
 
 ## Definitions
 
 - Step: one model request and its resulting assistant message, optionally followed by execution of (at most) one tool call.
 - Submit-enabled: a mode where the agent continues until the model calls `submit(answer)`.
 
-## Invariants
+## Prompt
 
-- At most one tool call is executed per step.
-- `parallel_tool_calls` is always disabled in the model request.
-- Sampling parameters are only sent if explicitly configured (otherwise provider defaults apply).
-- Web tools are not present unless explicitly enabled.
-- Tool outputs are bounded (pagination and/or truncation) to limit context growth.
-
-## Prompting
-
-The system prompt is fixed and tool-oriented. It includes the tool list, an environment header (including the working directory), and the constraint “use at most one tool call per step”.
+The system prompt is simple and includes the tool list, an environment header (which includes the working directory), and the constraint “use at most one tool call per step”.
 
 If `AGENTS.md` exists in the current directory or any parent directory, its contents are appended to the system prompt (concatenated along the directory chain).
 
@@ -91,6 +74,14 @@ On a context window exceeded error from the upstream provider, `ra` prunes the m
 - Drop the oldest portion of the remaining conversation (preferably at a user-message boundary).
 
 If pruning does not recover, the run terminates with an error.
+
+## Invariants
+
+- At most one tool call is executed per step.
+- `parallel_tool_calls` is always disabled in the model request.
+- Sampling parameters are only sent if explicitly configured (otherwise provider defaults apply).
+- Web tools are not present unless explicitly enabled.
+- Tool outputs are bounded (pagination and/or truncation) to limit context growth.
 
 ## Safety
 
