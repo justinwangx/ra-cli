@@ -1,0 +1,114 @@
+name: npm-publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag to publish for (must look like vX.Y.Z and the GitHub Release must already exist)"
+        required: true
+      npm_tag:
+        description: "Optional npm dist-tag (e.g. alpha)"
+        required: false
+
+concurrency:
+  group: npm-publish-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish ra-cli wrapper to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: validate inputs + versions
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${TAG}" ]]; then
+            echo "Missing required input: tag" >&2
+            exit 1
+          fi
+          if [[ "${TAG}" != v* ]]; then
+            echo "Expected tag to start with 'v', got: ${TAG}" >&2
+            exit 1
+          fi
+          TAG_VERSION="${TAG#v}"
+
+          CARGO_VERSION="$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*$/\1/p' ra/Cargo.toml | head -n 1)"
+          if [[ -z "${CARGO_VERSION}" ]]; then
+            echo "Failed to parse version from ra/Cargo.toml" >&2
+            exit 1
+          fi
+          if [[ "${TAG_VERSION}" != "${CARGO_VERSION}" ]]; then
+            echo "Tag version (${TAG_VERSION}) does not match ra/Cargo.toml version (${CARGO_VERSION})" >&2
+            exit 1
+          fi
+
+          NPM_VERSION="$(sed -nE 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*$/\1/p' ra/npm-package/package.json | head -n 1)"
+          if [[ -z "${NPM_VERSION}" ]]; then
+            echo "Failed to parse version from ra/npm-package/package.json" >&2
+            exit 1
+          fi
+          if [[ "${TAG_VERSION}" != "${NPM_VERSION}" ]]; then
+            echo "Tag version (${TAG_VERSION}) does not match ra/npm-package/package.json version (${NPM_VERSION})" >&2
+            exit 1
+          fi
+
+      - name: verify GitHub Release assets exist
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          repo="${GITHUB_REPOSITORY}"
+
+          targets=(
+            "x86_64-unknown-linux-musl"
+            "aarch64-unknown-linux-musl"
+            "x86_64-apple-darwin"
+            "aarch64-apple-darwin"
+          )
+
+          for target in "${targets[@]}"; do
+            asset="ra-${target}.tar.gz"
+            url="https://github.com/${repo}/releases/download/${TAG}/${asset}"
+            echo "Checking ${url}"
+            curl -fsSLI "${url}" >/dev/null
+          done
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Pack
+        run: |
+          set -euo pipefail
+          mkdir -p dist/npm
+          (cd ra/npm-package && npm pack --ignore-scripts --pack-destination "${GITHUB_WORKSPACE}/dist/npm")
+
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TAG: ${{ inputs.npm_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -1 dist/npm/*.tgz
+
+          tag_args=()
+          if [[ -n "${NPM_TAG}" ]]; then
+            tag_args+=(--tag "${NPM_TAG}")
+          fi
+
+          npm publish dist/npm/*.tgz "${tag_args[@]}"

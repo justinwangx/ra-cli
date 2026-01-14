@@ -1,0 +1,40 @@
+{
+  "name": "ra-cli",
+  "version": "0.1.7",
+  "description": "Baseline ReAct agent CLI (prebuilt binary installer).",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/justinwangx/ra-cli.git"
+  },
+  "homepage": "https://github.com/justinwangx/ra-cli",
+  "bugs": {
+    "url": "https://github.com/justinwangx/ra-cli/issues"
+  },
+  "keywords": [
+    "react",
+    "agent",
+    "cli",
+    "openrouter"
+  ],
+  "bin": {
+    "ra": "bin/ra.js"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "files": [
+    "bin/ra.js",
+    "scripts/**",
+    "README.md",
+    "LICENSE"
+  ]
+}
