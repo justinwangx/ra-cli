@@ -1,4 +1,4 @@
-# Ra agent specification
+# Specification
 
 This document specifies the behavior of `ra`.
 
