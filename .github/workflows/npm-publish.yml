@@ -21,6 +21,9 @@ jobs:
   publish:
     name: Publish ra-cli wrapper to npm
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write # For npm OIDC trusted publishing (optional; token fallback also supported)
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -91,6 +94,21 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
+      # Trusted publishing (OIDC) requires a relatively recent npm CLI.
+      - name: Update npm
+        run: npm install -g npm@latest
+
+      - name: Configure npm auth (token optional)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${{ secrets.NPM_TOKEN }}" ]]; then
+            echo "Using NPM_TOKEN auth."
+            echo "NODE_AUTH_TOKEN=${{ secrets.NPM_TOKEN }}" >> "${GITHUB_ENV}"
+          else
+            echo "No NPM_TOKEN provided; assuming npm OIDC trusted publishing is configured."
+          fi
+
       - name: Pack
         run: |
           set -euo pipefail
@@ -99,7 +117,8 @@ jobs:
 
       - name: Publish
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Read by npm CLI when using token auth; absent when using OIDC.
+          NODE_AUTH_TOKEN: ${{ env.NODE_AUTH_TOKEN }}
           NPM_TAG: ${{ inputs.npm_tag }}
         shell: bash
         run: |
